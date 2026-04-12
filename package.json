@@ -1,7 +1,7 @@
 {
-  "name": "client-acquisition-engine",
+  "name": "shorts-studio",
   "version": "1.0.0",
-  "description": "AI-powered client acquisition system with web search and personalized email generation",
+  "description": "AI-powered shorts content generation",
   "private": true,
   "scripts": {
     "dev": "next dev",
