@@ -1,76 +1,100 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 
-export async function POST(req: NextRequest) {
+export async function POST(req: Request) {
   try {
-    const { topic, tone } = await req.json();
+    // ✅ Validate env
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return NextResponse.json(
+        { success: false, error: "Server misconfigured" },
+        { status: 500 }
+      );
+    }
 
-    const prompt = `You are an expert viral YouTube Shorts scriptwriter specializing in motivational content that gets millions of views.
+    const body = await req.json();
+    const { topic, tone } = body;
 
-Write a ${tone || "aggressive"} motivational YouTube Short script about: "${
-      topic || "never giving up on your dreams"
-    }"
+    if (!topic) {
+      return NextResponse.json(
+        { success: false, error: "Topic is required" },
+        { status: 400 }
+      );
+    }
 
-Tone definitions:
-- aggressive: high-energy, in-your-face, bold claims, fire metaphors, urgency
-- stoic: calm authority, disciplined, no fluff
-- spiritual: deeper meaning, purpose-driven
-- raw: street-level honesty, conversational
+    const prompt = `
+Generate a viral YouTube Shorts script.
 
-Structure (4 segments):
-- hook: under 10 words, powerful scroll-stopper
-- body1: short emotional build
-- body2: core insight
-- cta: short action line with 1 emoji
+Topic: ${topic}
+Tone: ${tone || "engaging"}
 
-Respond ONLY with valid JSON. No markdown. No explanation.
+Return ONLY valid JSON:
 
 {
   "hook": "...",
-  "body1": "...",
-  "body2": "...",
+  "script": "...",
   "cta": "..."
-}`;
+}
+`;
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
-        "x-api-key": process.env.ANTHROPIC_API_KEY || "",
+        "x-api-key": process.env.ANTHROPIC_API_KEY,
         "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-3-sonnet-20240229",
         max_tokens: 800,
-        messages: [
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
+        messages: [{ role: "user", content: prompt }],
       }),
     });
 
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error("Anthropic error:", errText);
+
+      return NextResponse.json(
+        { success: false, error: "AI request failed" },
+        { status: 500 }
+      );
+    }
+
     const data = await response.json();
 
-    const text =
-      data.content?.map((item: any) => item.text || "").join("") || "";
+    const text = data?.content?.[0]?.text;
 
-    const cleaned = text.replace(/```json|```/g, "").trim();
+    if (!text) {
+      return NextResponse.json(
+        { success: false, error: "Empty AI response" },
+        { status: 500 }
+      );
+    }
 
-    const parsed = JSON.parse(cleaned);
+    // ✅ Clean response
+    const cleaned = text
+      .replace(/```json/g, "")
+      .replace(/```/g, "")
+      .trim();
 
-    return NextResponse.json({
-      success: true,
-      data: parsed,
-    });
-  } catch (error) {
-    console.error("Generate Error:", error);
+    let parsed;
+
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch (e) {
+      console.error("JSON parse failed:", cleaned);
+
+      return NextResponse.json(
+        { success: false, error: "Invalid AI format" },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ success: true, data: parsed });
+  } catch (err) {
+    console.error("Server error:", err);
 
     return NextResponse.json(
-      {
-        success: false,
-        error: "Script generation failed",
-      },
+      { success: false, error: "Unexpected server error" },
       { status: 500 }
     );
   }
