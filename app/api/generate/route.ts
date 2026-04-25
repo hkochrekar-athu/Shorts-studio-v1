@@ -2,40 +2,23 @@ import { NextResponse } from "next/server";
 
 export async function POST(req: Request) {
   try {
-    // ✅ Validate env
-    if (!process.env.ANTHROPIC_API_KEY) {
+    if (!process.env.ANTHROPIC_API_KEY || !process.env.ELEVENLABS_API_KEY) {
       return NextResponse.json(
-        { success: false, error: "Server misconfigured" },
+        { success: false, error: "API Keys missing in Environment Variables" },
         { status: 500 }
       );
     }
 
-    const body = await req.json();
-    const { topic, tone } = body;
+    const { topic, tone } = await req.json();
 
     if (!topic) {
-      return NextResponse.json(
-        { success: false, error: "Topic is required" },
-        { status: 400 }
-      );
+      return NextResponse.json({ success: false, error: "Topic is required" }, { status: 400 });
     }
 
-    const prompt = `
-Generate a viral YouTube Shorts script.
+    // 1. Generate Script via Claude
+    const prompt = `Generate a viral YouTube Shorts script about ${topic} in a ${tone} tone. Return ONLY valid JSON: {"hook": "...", "script": "...", "cta": "..."}`;
 
-Topic: ${topic}
-Tone: ${tone || "engaging"}
-
-Return ONLY valid JSON:
-
-{
-  "hook": "...",
-  "script": "...",
-  "cta": "..."
-}
-`;
-
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "x-api-key": process.env.ANTHROPIC_API_KEY,
@@ -49,53 +32,44 @@ Return ONLY valid JSON:
       }),
     });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error("Anthropic error:", errText);
+    const aiData = await anthropicRes.json();
+    const textOutput = aiData?.content?.[0]?.text;
+    const cleanedJson = textOutput.replace(/```json/g, "").replace(/```/g, "").trim();
+    const parsedScript = JSON.parse(cleanedJson);
 
-      return NextResponse.json(
-        { success: false, error: "AI request failed" },
-        { status: 500 }
-      );
-    }
+    // 2. Generate Audio via ElevenLabs
+    // We combine the hook and script for the full voiceover
+    const fullText = `${parsedScript.hook}. ${parsedScript.script}`;
+    
+    const ttsResponse = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "xi-api-key": process.env.ELEVENLABS_API_KEY,
+      },
+      body: JSON.stringify({
+        text: fullText,
+        model_id: "eleven_monolingual_v1",
+        voice_settings: { stability: 0.5, similarity_boost: 0.5 },
+      }),
+    });
 
-    const data = await response.json();
+    if (!ttsResponse.ok) throw new Error("TTS Generation Failed");
 
-    const text = data?.content?.[0]?.text;
+    // Convert audio binary to base64 so it can be sent in JSON
+    const audioBuffer = await ttsResponse.arrayBuffer();
+    const audioBase64 = Buffer.from(audioBuffer).toString("base64");
 
-    if (!text) {
-      return NextResponse.json(
-        { success: false, error: "Empty AI response" },
-        { status: 500 }
-      );
-    }
+    return NextResponse.json({ 
+      success: true, 
+      data: {
+        ...parsedScript,
+        audio: `data:audio/mpeg;base64,${audioBase64}` 
+      } 
+    });
 
-    // ✅ Clean response
-    const cleaned = text
-      .replace(/```json/g, "")
-      .replace(/```/g, "")
-      .trim();
-
-    let parsed;
-
-    try {
-      parsed = JSON.parse(cleaned);
-    } catch (e) {
-      console.error("JSON parse failed:", cleaned);
-
-      return NextResponse.json(
-        { success: false, error: "Invalid AI format" },
-        { status: 500 }
-      );
-    }
-
-    return NextResponse.json({ success: true, data: parsed });
   } catch (err) {
     console.error("Server error:", err);
-
-    return NextResponse.json(
-      { success: false, error: "Unexpected server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }
